@@ -36,6 +36,10 @@ const storage = multer.diskStorage({
     }
   });
 
+app.get("/",(req,res)=>{
+    res.send("Hello from the server")
+})
+
 
   app.post('/register', async (req, res) => {
     try {
