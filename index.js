@@ -2,9 +2,9 @@ const express = require("express");
 const app = express();
 const cors = require("cors");
 const { connectToMongoDB } = require("./connection/model");
-const Feedback = require("./models/Feedback");
+const Feedback = require("./model/Feedback");
 
-const BinFullNotification = require("./models/BinFullNotification");
+const BinFullNotification = require("./model/BinFullNotification");
 
 app.use(cors());
 app.use(express.json()); // Add this to parse JSON request bodies
@@ -378,15 +378,19 @@ app.get("/gethistory/:phoneNumber", async (req, res) => {
 
 app.get("/getNotification", async (req, res) => {
   try {
+    const db = await connectToMongoDB();  // Connect to MongoDB
+    const notificationsCollection = db.collection("binfullnotifications");  // Reference the collection
+
     const { binType, limit } = req.query;
     const filter = {};
     if (binType) {
       filter.binType = binType;
     }
 
-    const notifications = await BinFullNotification.find(filter)
+    const notifications = await notificationsCollection.find(filter)
       .sort({ occurredAt: -1 }) // newest first
-      .limit(parseInt(limit, 10) || 100); // default max 100
+      .limit(parseInt(limit, 10) || 100) // default max 100
+      .toArray();
 
     res.status(200).json({
       message: "Notifications fetched successfully.",
@@ -401,13 +405,15 @@ app.get("/getNotification", async (req, res) => {
 
 app.get("/getAllData", async (req, res) => {
   try {
-    // Fetch all Feedback and join with RecyclingSession using $lookup
-    const data = await Feedback.aggregate([
+    const db = await connectToMongoDB();  // Connect to MongoDB
+    
+    // Perform aggregation using the native MongoDB driver
+    const data = await db.collection("feedbacks").aggregate([
       {
         $lookup: {
-          from: "recyclingsessions", // Name of the RecyclingSession collection (in lowercase)
-          localField: "phoneNumber", // Field in the Feedback collection
-          foreignField: "phoneNumber", // Field in the RecyclingSession collection
+          from: "recyclingsessions", // Name of the recycling sessions collection
+          localField: "phoneNumber", // Field in the feedbacks collection
+          foreignField: "phoneNumber", // Field in the recycling sessions collection
           as: "recyclingSessions", // Alias for the joined data
         },
       },
@@ -417,7 +423,7 @@ app.get("/getAllData", async (req, res) => {
           preserveNullAndEmptyArrays: true, // Include feedback data even if no recycling session
         },
       },
-    ]);
+    ]).toArray();
 
     // Send the combined result to the client
     res.json(data);
