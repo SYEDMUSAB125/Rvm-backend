@@ -10,31 +10,7 @@ app.use(cors());
 app.use(express.json()); // Add this to parse JSON request bodies
 
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-      // Create uploads directory if it doesn't exist
-      const uploadDir = 'uploads/profilePics/';
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-      cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-      cb(null, file.originalname);
-    }
-  });
-  
-  const upload = multer({ 
-    storage: storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-    fileFilter: (req, file, cb) => {
-      if (file.mimetype.startsWith('image/')) {
-        cb(null, true);
-      } else {
-        cb(new Error('Only image files are allowed!'), false);
-      }
-    }
-  });
+
 
 app.get("/",(req,res)=>{
     res.send("Hello from the server")
@@ -402,6 +378,58 @@ app.get('/gethistory/:phoneNumber', async (req, res) => {
       error: 'Internal server error',
       details: err.message // Send error details for debugging
     });
+  }
+});
+
+
+app.get('/getNotification', async (req, res) => {
+  try {
+    const { binType, limit } = req.query;
+    const filter = {};
+    if (binType) {
+      filter.binType = binType;
+    }
+
+    const notifications = await BinFullNotification.find(filter)
+      .sort({ occurredAt: -1 })                         // newest first
+      .limit(parseInt(limit, 10) || 100);               // default max 100
+
+    res.status(200).json({
+      message: 'Notifications fetched successfully.',
+      count: notifications.length,
+      notifications,
+    });
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
+    res.status(500).json({ message: 'Internal server error.' });
+  }
+});
+
+app.get('/getAllData', async (req, res) => {
+  try {
+    // Fetch all Feedback and join with RecyclingSession using $lookup
+    const data = await Feedback.aggregate([
+      {
+        $lookup: {
+          from: 'recyclingsessions',  // Name of the RecyclingSession collection (in lowercase)
+          localField: 'phoneNumber',   // Field in the Feedback collection
+          foreignField: 'phoneNumber', // Field in the RecyclingSession collection
+          as: 'recyclingSessions',     // Alias for the joined data
+        },
+      },
+      {
+        $unwind: {
+          path: '$recyclingSessions', // Flatten the recyclingSessions array
+          preserveNullAndEmptyArrays: true, // Include feedback data even if no recycling session
+        },
+      },
+    ]);
+
+    // Send the combined result to the client
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching data:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
   }
 });
 
