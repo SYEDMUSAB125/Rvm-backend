@@ -436,3 +436,44 @@ app.get("/getAllData", async (req, res) => {
 app.listen(3000, () => {
   console.log("Server is running on port 3000");
 });
+
+//for fetching registered users based on points
+app.get("/registeredusers", async (req, res) => {
+  try {
+    const userPoints = await RecyclingSession.aggregate([
+      {
+        $match: {
+          phoneNumber: { $ne: null },
+          userName: { $ne: null },
+        },
+      },
+      {
+        $group: {
+          _id: "$phoneNumber",
+          totalPoints: { $sum: "$points" },
+          latestUserName: { $last: "$userName" },
+        },
+      },
+      {
+        $match: {
+          latestUserName: { $ne: null }, // extra filter after grouping just in case
+        },
+      },
+      {
+        $sort: { totalPoints: -1 },
+      },
+    ]);
+
+    res.status(200).json({
+      message: "Top 5 users fetched successfully.",
+      users: userPoints.map(user => ({
+        phoneNumber: user._id,
+        userName: user.latestUserName,
+        totalPoints: user.totalPoints,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching top users:", error);
+    res.status(500).json({ message: "Internal server error." });
+  }
+});
