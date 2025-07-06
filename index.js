@@ -406,7 +406,7 @@ app.get("/getNotification", async (req, res) => {
 app.get("/getAllData", async (req, res) => {
   try {
     const db = await connectToMongoDB();  // Connect to MongoDB
-    
+
     // Perform aggregation using the native MongoDB driver
     const data = await db.collection("feedbacks").aggregate([
       {
@@ -440,7 +440,9 @@ app.listen(3000, () => {
 //for fetching registered users based on points
 app.get("/registeredusers", async (req, res) => {
   try {
-    const userPoints = await RecyclingSession.aggregate([
+    const db = await connectToMongoDB();
+    const usersCollection = db.collection("recyclingsessions");
+    const userPoints = usersCollection.aggregate([
       {
         $match: {
           phoneNumber: { $ne: null },
