@@ -3,8 +3,11 @@ const app = express();
 const cors = require("cors");
 const { connectToMongoDB } = require("./connection/model");
 const Feedback = require("./model/Feedback");
-
+const RecyclingSessions = require("./model/RecyclingSession");
+const bcrypt = require('bcrypt');
+const saltRounds = 10;
 const BinFullNotification = require("./model/BinFullNotification");
+const RecyclingSession = require("./model/RecyclingSession");
 
 app.use(cors());
 app.use(express.json()); // Add this to parse JSON request bodies
@@ -13,24 +16,98 @@ app.get("/", (req, res) => {
   res.send("Hello from the server");
 });
 
-app.post("/register", async (req, res) => {
-  try {
-    const { phoneNumber, username, age, gender, profilePicPath } = req.body;
 
-    // Validation
-    if (!phoneNumber || !username) {
+app.post("/login", async (req, res) => {
+  try {
+    const { mobileOrEmail, password } = req.body;
+
+    // Basic validation
+    if (!mobileOrEmail || !password) {
       return res.status(400).json({
         success: false,
-        error: "Validation Error",
-        message: "Phone number and username are required",
+        message: "Both mobile/email and password are required",
       });
     }
 
-    if (age && isNaN(age)) {
+    // Connect to MongoDB
+    const db = await connectToMongoDB();
+    const userProfileCollection = db.collection("userprofile");
+    const recyclingSessionsCollection = db.collection("recyclingsessions");
+
+    // Find user by mobile or email
+    const user = await userProfileCollection.findOne({
+      $or: [
+        { mobile: mobileOrEmail },
+        { email: mobileOrEmail }
+      ]
+    });
+
+    // User not found
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    // Compare passwords
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    // Update last login time
+    await userProfileCollection.updateOne(
+      { _id: user._id },
+      { $set: { lastLogin: new Date() } }
+    );
+
+    // Check for recycling sessions
+    const recycleDetails = await recyclingSessionsCollection.findOne({ 
+      phoneNumber: user.mobile 
+    });
+
+    // Remove sensitive data from user response
+    const { password: _, ...userResponse } = user;
+    // console.log("User response:", user);
+    res.status(200).json({
+      success: true,
+      message: "Login successful",
+      user: userResponse,
+      recycleDetails: recycleDetails || false // Return details or false if none exist
+    });
+
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+
+
+
+app.post("/register", async (req, res) => {
+  try {
+    const { username, mobile, age, nic, email, password, gender } = req.body;
+
+    // Basic validation
+    if (!username || !mobile || !email || !password || !nic) {
       return res.status(400).json({
         success: false,
-        error: "Validation Error",
-        message: "Age must be a number",
+        message: "All fields are required",
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters",
       });
     }
 
@@ -39,53 +116,53 @@ app.post("/register", async (req, res) => {
     const userProfileCollection = db.collection("userprofile");
 
     // Check if user exists
-    const existingUser = await userProfileCollection.findOne({ phoneNumber });
+    const existingUser = await userProfileCollection.findOne({ 
+      $or: [{ mobile }, { email }] 
+    });
+    
     if (existingUser) {
       return res.status(409).json({
         success: false,
-        error: "Conflict",
-        message: "User already exists",
+        message: "User already exists with this mobile or email",
       });
     }
 
-    // Create new user profile document
-    const newUserProfile = {
-      phoneNumber,
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    // Create new user document
+    const newUser = {
       username,
+      mobile,
       age: age ? parseInt(age) : null,
-      gender: gender || "unspecified",
-      profilePic: profilePicPath || "../assets/images/male-avatar.png", // Store the path directly
+      nic,
+      gender: gender || "male",
+      email,
+      password: hashedPassword, // Store hashed password
       createdAt: new Date(),
       updatedAt: new Date(),
-      __v: 0,
+      lastLogin: new Date(),
+      __v: 0
     };
 
-    // Insert into userprofile collection
-    const result = await userProfileCollection.insertOne(newUserProfile);
+    // Insert user
+    const result = await userProfileCollection.insertOne(newUser);
 
-    // Construct response
-    const userResponse = {
-      _id: result.insertedId,
-      phoneNumber: newUserProfile.phoneNumber,
-      username: newUserProfile.username,
-      age: newUserProfile.age,
-      gender: newUserProfile.gender,
-      profilePic: newUserProfile.profilePic, // Return the path as-is
-      createdAt: newUserProfile.createdAt,
-    };
+    // Remove password from response
+    const { password: _, ...userResponse } = newUser;
+    userResponse._id = result.insertedId;
 
     res.status(201).json({
       success: true,
-      message: "User registered successfully",
-      user: userResponse,
+      message: "Registration successful",
+      user: userResponse
     });
+
   } catch (error) {
     console.error("Registration error:", error);
-
     res.status(500).json({
       success: false,
-      error: "Server Error",
-      message: "Internal server error during registration",
+      message: "Internal server error",
     });
   }
 });
@@ -254,6 +331,64 @@ app.get("/newgethistory/:phoneNumber", async (req, res) => {
     });
   }
 });
+
+app.get("/usernames", async (req, res) => {
+  try {
+    const db = await connectToMongoDB();
+    const sessionsCollection = db.collection("recyclingsessions");
+
+    const userPoints = await sessionsCollection.aggregate([
+      {
+        $match: {
+          phoneNumber: { $ne: null },
+          userName: { $ne: null },
+        },
+      },
+      {
+        $sort: {
+          recycledAt: 1,
+        },
+      },
+      {
+        $group: {
+          _id: "$phoneNumber",
+          totalPoints: { $sum: "$points" },
+          latestUserName: { $last: "$userName" },
+        },
+      },
+      {
+        $match: {
+          latestUserName: { $ne: null },
+        },
+      },
+      {
+        $sort: { totalPoints: -1 },
+      },
+      {
+        $limit: 5,
+      },
+    ]).toArray();
+
+    // ✅ Always return a JSON response
+    return res.status(200).json({
+      message: "Top 5 users fetched successfully.",
+      users: userPoints.map(user => ({
+        phoneNumber: user._id,
+        userName: user.latestUserName,
+        totalPoints: user.totalPoints,
+      })),
+    });
+
+  } catch (error) {
+    console.error("Error fetching top users:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+});
+
+
+
+
+
 // POST endpoint to create a new user
 app.post("/users", async (req, res) => {
   try {
@@ -308,21 +443,21 @@ app.get("/getrecycle/:phoneNumber", async (req, res) => {
   try {
     const db = await connectToMongoDB();
     const usersCollection = db.collection("recyclingsessions");
-
     const phoneNumber = req.params.phoneNumber;
 
     const user = await usersCollection.findOne({ phoneNumber });
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return res.status(200).json({ success: false, message: "No recycling data found" });
     }
 
-    res.status(200).json(user);
+    res.status(200).json({ success: true, data: user });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
+
 app.post("/updateUser", async (req, res) => {
   const { phoneNumber, userName } = req.body;
 
