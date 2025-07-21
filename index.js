@@ -577,7 +577,8 @@ app.get("/registeredusers", async (req, res) => {
   try {
     const db = await connectToMongoDB();
     const usersCollection = db.collection("recyclingsessions");
-    const userPoints = usersCollection.aggregate([
+
+    const userPoints = await usersCollection.aggregate([
       {
         $match: {
           phoneNumber: { $ne: null },
@@ -593,13 +594,13 @@ app.get("/registeredusers", async (req, res) => {
       },
       {
         $match: {
-          latestUserName: { $ne: null }, // extra filter after grouping just in case
+          latestUserName: { $ne: null },
         },
       },
       {
         $sort: { totalPoints: -1 },
       },
-    ]);
+    ]).toArray(); // <-- FIXED HERE
 
     res.status(200).json({
       message: "Top 5 users fetched successfully.",
