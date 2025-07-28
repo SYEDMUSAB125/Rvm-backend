@@ -582,7 +582,7 @@ app.get("/getAllData", async (req, res) => {
   }
 });
 
-app.listen(3001, () => {
+app.listen(3000, () => {
   console.log("Server is running on port 3000");
 });
 
@@ -627,5 +627,32 @@ app.get("/registeredusers", async (req, res) => {
   } catch (error) {
     console.error("Error fetching top users:", error);
     res.status(500).json({ message: "Internal server error." });
+  }
+});
+app.post('/loginadmin', (req, res) => {
+  const { username, password } = req.body;
+  // Authenticate user here
+  if (username === 'admin' && password === 'admin') {
+    return res.json({ success: true });
+  } else {
+    return res.json({ success: false });
+  }
+});
+
+app.get("/mobusers", async (req, res) => {
+  try {
+    const db = await connectToMongoDB();
+    const userProfiles = db.collection("userprofile");
+
+    // Fetch only the 'username' field and exclude '_id'
+    const users = await userProfiles.find({}, { projection: { username: 1, _id: 0 } }).toArray();
+
+    // Extract usernames from the result
+    const usernames = users.map(user => user.username);
+
+    res.json({ success: true, usernames });
+  } catch (error) {
+    console.error("Error fetching usernames:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
