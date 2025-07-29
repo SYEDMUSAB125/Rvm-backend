@@ -145,13 +145,11 @@ app.post("/generate-vouch365-link", (req, res) => {
   }
 });
 
-
-
 app.post("/register", async (req, res) => {
   try {
     const { username, mobile, age, nic, email, password, gender } = req.body;
+    console.log("Registration request body:", req.body);
 
-    // Basic validation
     if (!username || !mobile || !email || !password || !nic) {
       return res.status(400).json({
         success: false,
@@ -166,15 +164,15 @@ app.post("/register", async (req, res) => {
       });
     }
 
-    // Connect to MongoDB
     const db = await connectToMongoDB();
     const userProfileCollection = db.collection("userprofile");
+    const recyclingSessionsCollection = db.collection("recyclingsessions");
 
     // Check if user exists
-    const existingUser = await userProfileCollection.findOne({ 
-      $or: [{ mobile }, { email }] 
+    const existingUser = await userProfileCollection.findOne({
+      $or: [{ mobile }, { email }]
     });
-    
+
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -185,7 +183,7 @@ app.post("/register", async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create new user document
+    // Create new user
     const newUser = {
       username,
       mobile,
@@ -193,17 +191,32 @@ app.post("/register", async (req, res) => {
       nic,
       gender: gender || "male",
       email,
-      password: hashedPassword, // Store hashed password
+      password: hashedPassword,
       createdAt: new Date(),
       updatedAt: new Date(),
       lastLogin: new Date(),
       __v: 0
     };
 
-    // Insert user
+    // Insert user into userprofile
     const result = await userProfileCollection.insertOne(newUser);
 
-    // Remove password from response
+    // Update recyclingsessions with matching phoneNumber and missing/null userName
+    await recyclingSessionsCollection.updateMany(
+      {
+        phoneNumber: mobile,
+        $or: [
+          { userName: { $exists: false } },
+          { userName: null },
+          { userName: "" }
+        ]
+      },
+      {
+        $set: { userName: username }
+      }
+    );
+
+    // Respond
     const { password: _, ...userResponse } = newUser;
     userResponse._id = result.insertedId;
 
@@ -221,6 +234,7 @@ app.post("/register", async (req, res) => {
     });
   }
 });
+
 
 app.put("/update-profile/:phoneNumber", async (req, res) => {
   try {
@@ -668,5 +682,32 @@ app.get("/registeredusers", async (req, res) => {
   } catch (error) {
     console.error("Error fetching top users:", error);
     res.status(500).json({ message: "Internal server error." });
+  }
+});
+app.post('/loginadmin', (req, res) => {
+  const { username, password } = req.body;
+  // Authenticate user here
+  if (username === 'admin' && password === 'admin') {
+    return res.json({ success: true });
+  } else {
+    return res.json({ success: false });
+  }
+});
+
+app.get("/mobusers", async (req, res) => {
+  try {
+    const db = await connectToMongoDB();
+    const userProfiles = db.collection("userprofile");
+
+    // Fetch only the 'username' field and exclude '_id'
+    const users = await userProfiles.find({}, { projection: { username: 1, _id: 0 } }).toArray();
+
+    // Extract usernames from the result
+    const usernames = users.map(user => user.username);
+
+    res.json({ success: true, usernames });
+  } catch (error) {
+    console.error("Error fetching usernames:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
