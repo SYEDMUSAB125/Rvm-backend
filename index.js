@@ -8,7 +8,7 @@ const bcrypt = require('bcrypt');
 const saltRounds = 10;
 const BinFullNotification = require("./model/BinFullNotification");
 const RecyclingSession = require("./model/RecyclingSession");
-const generateVouch365Link = require("./utils/vouch365");
+const generateVouch365Link = require("./utils/vouch365")
 app.use(cors());
 app.use(express.json()); // Add this to parse JSON request bodies
 
@@ -121,6 +121,7 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/generate-vouch365-link", (req, res) => {
+  console.log(req.body)
   const { username, phone } = req.body;
 
   if (!username || !phone) {
