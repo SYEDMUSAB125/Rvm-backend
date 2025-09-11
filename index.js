@@ -554,33 +554,59 @@ app.get("/getNotification", async (req, res) => {
 
 app.get("/getAllData", async (req, res) => {
   try {
-    const db = await connectToMongoDB();  // Connect to MongoDB
+    const db = await connectToMongoDB();
 
-    // Perform aggregation using the native MongoDB driver
-    const data = await db.collection("feedbacks").aggregate([
-      {
-        $lookup: {
-          from: "recyclingsessions", // Name of the recycling sessions collection
-          localField: "phoneNumber", // Field in the feedbacks collection
-          foreignField: "phoneNumber", // Field in the recycling sessions collection
-          as: "recyclingSessions", // Alias for the joined data
-        },
-      },
-      {
-        $unwind: {
-          path: "$recyclingSessions", // Flatten the recyclingSessions array
-          preserveNullAndEmptyArrays: true, // Include feedback data even if no recycling session
-        },
-      },
-    ]).toArray();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
 
-    // Send the combined result to the client
-    res.json(data);
+    const data = await db.collection("feedbacks")
+      .aggregate([
+        {
+          $lookup: {
+            from: "recyclingsessions",
+            localField: "phoneNumber",
+            foreignField: "phoneNumber",
+            as: "recyclingSessions",
+          },
+        },
+        {
+          $unwind: {
+            path: "$recyclingSessions",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $project: {
+            name: 1,
+            phoneNumber: 1,
+            feedback: 1,
+            "recyclingSessions.bottles": 1,
+            "recyclingSessions.cups": 1,
+            "recyclingSessions.points": 1,
+          },
+        },
+        { $skip: skip },
+        { $limit: limit },
+      ])
+      .toArray();
+
+    const totalCount = await db.collection("feedbacks").countDocuments();
+
+    res.json({
+      page,
+      limit,
+      totalPages: Math.ceil(totalCount / limit),
+      totalCount,
+      data,
+    });
   } catch (error) {
     console.error("Error fetching data:", error);
     res.status(500).json({ message: "Internal Server Error" });
   }
 });
+
+
 
 app.listen(3000, () => {
   console.log("Server is running on port 3000");
