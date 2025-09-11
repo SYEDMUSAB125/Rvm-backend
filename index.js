@@ -8,7 +8,7 @@ const bcrypt = require('bcrypt');
 const saltRounds = 10;
 const BinFullNotification = require("./model/BinFullNotification");
 const RecyclingSession = require("./model/RecyclingSession");
-
+const generateVouch365Link = require("./utils/vouch365")
 app.use(cors());
 app.use(express.json()); // Add this to parse JSON request bodies
 
@@ -65,19 +65,50 @@ app.post("/login", async (req, res) => {
       { $set: { lastLogin: new Date() } }
     );
 
-    // Check for recycling sessions
-    const recycleDetails = await recyclingSessionsCollection.findOne({ 
+    // Find all recycling sessions for this user and calculate totals
+    const recyclingSessions = await recyclingSessionsCollection.find({ 
       phoneNumber: user.mobile 
-    });
+    }).toArray();
+    console.log(recyclingSessions)
+    // Calculate totals
+    let totalPoints = 0;
+    let totalBottles = 0;
+    let totalCups = 0;
+    let latestRecycleDate = null;
+
+    if (recyclingSessions.length > 0) {
+      recyclingSessions.forEach(session => {
+        totalPoints += session.points || 0;
+        totalBottles += session.bottles || 0;
+        totalCups += session.cups || 0;
+        
+        // Find the latest recycling date
+        if (!latestRecycleDate || new Date(session.recycledAt) > new Date(latestRecycleDate)) {
+          latestRecycleDate = session.recycledAt;
+        }
+      });
+    }
+
+    // Create recycleDetails object with totals
+    const recycleDetails = recyclingSessions.length > 0 ? {
+      _id: recyclingSessions[0]._id, // Keep the first _id for reference
+      userName: user.username,
+      phoneNumber: user.mobile,
+      bottles: totalBottles,
+      cups: totalCups,
+      points: totalPoints,
+      recycledAt: latestRecycleDate,
+      totalSessions: recyclingSessions.length
+    } : false;
 
     // Remove sensitive data from user response
     const { password: _, ...userResponse } = user;
-    // console.log("User response:", user);
+
     res.status(200).json({
       success: true,
       message: "Login successful",
       user: userResponse,
-      recycleDetails: recycleDetails || false // Return details or false if none exist
+      recycleDetails: recycleDetails
     });
 
   } catch (error) {
@@ -89,6 +120,31 @@ app.post("/login", async (req, res) => {
   }
 });
 
+app.post("/generate-vouch365-link", (req, res) => {
+  console.log(req.body)
+  const { username, phone } = req.body;
+
+  if (!username || !phone) {
+    return res.status(400).json({
+      success: false,
+      message: "username and phone are required",
+    });
+  }
+
+  try {
+    const vouch365Link = generateVouch365Link(username, phone);
+    return res.json({
+      success: true,
+      link: vouch365Link,
+    });
+  } catch (err) {
+    console.error("Vouch365 Link Generation Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Error generating Vouch365 link",
+    });
+  }
+});
 
 app.post("/register", async (req, res) => {
   try {
