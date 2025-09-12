@@ -66,8 +66,8 @@ app.post("/login", async (req, res) => {
     );
 
     // Find all recycling sessions for this user and calculate totals
-    const recyclingSessions = await recyclingSessionsCollection.find({ 
-      phoneNumber: user.mobile 
+    const recyclingSessions = await recyclingSessionsCollection.find({
+      phoneNumber: user.mobile
     }).toArray();
     console.log(recyclingSessions)
     // Calculate totals
@@ -81,7 +81,7 @@ app.post("/login", async (req, res) => {
         totalPoints += session.points || 0;
         totalBottles += session.bottles || 0;
         totalCups += session.cups || 0;
-        
+
         // Find the latest recycling date
         if (!latestRecycleDate || new Date(session.recycledAt) > new Date(latestRecycleDate)) {
           latestRecycleDate = session.recycledAt;
@@ -632,16 +632,6 @@ app.get("/getAllData", async (req, res) => {
             preserveNullAndEmptyArrays: true,
           },
         },
-        {
-          $project: {
-            name: 1,
-            phoneNumber: 1,
-            feedback: 1,
-            "recyclingSessions.bottles": 1,
-            "recyclingSessions.cups": 1,
-            "recyclingSessions.points": 1,
-          },
-        },
         { $skip: skip },
         { $limit: limit },
       ])
@@ -659,6 +649,28 @@ app.get("/getAllData", async (req, res) => {
   } catch (error) {
     console.error("Error fetching data:", error);
     res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+app.get("/getstats", async (req, res) => {
+  const db = await connectToMongoDB();
+  try {
+    const stats = await db.collection("recyclingsessions")
+      .aggregate([
+        {
+          $group: {
+            _id: null,
+            totalBottles: { $sum: "$bottles" },
+            totalCups: { $sum: "$cups" },
+            totalPoints: { $sum: "$points" },
+          },
+        },
+      ])
+      .toArray();
+
+    res.json(stats[0] || { totalBottles: 0, totalCups: 0, totalPoints: 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
