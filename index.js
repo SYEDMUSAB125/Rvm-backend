@@ -9,6 +9,9 @@ const saltRounds = 10;
 const BinFullNotification = require("./model/BinFullNotification");
 const RecyclingSession = require("./model/RecyclingSession");
 const generateVouch365Link = require("./utils/vouch365")
+const jwt = require("jsonwebtoken");
+const SECRET_KEY = "isp-env-sol"; // move to env in real apps
+
 app.use(cors());
 app.use(express.json()); // Add this to parse JSON request bodies
 
@@ -723,13 +726,15 @@ app.get("/registeredusers", async (req, res) => {
     res.status(500).json({ message: "Internal server error." });
   }
 });
+
 app.post('/loginadmin', (req, res) => {
   const { username, password } = req.body;
-  // Authenticate user here
+
   if (username === 'admin' && password === 'admin') {
-    return res.json({ success: true });
+    const token = jwt.sign({ username }, SECRET_KEY, { expiresIn: "1h" });
+    return res.json({ success: true, token });
   } else {
-    return res.json({ success: false });
+    return res.json({ success: false, message: "Invalid credentials" });
   }
 });
 
