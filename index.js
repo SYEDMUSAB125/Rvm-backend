@@ -459,9 +459,6 @@ app.get("/usernames", async (req, res) => {
 });
 
 
-
-
-
 // POST endpoint to create a new user
 app.post("/users", async (req, res) => {
   try {
@@ -584,20 +581,21 @@ app.get("/gethistory/:phoneNumber", async (req, res) => {
   }
 });
 
+// RVM Admin Panel APIs
 app.get("/getNotification", async (req, res) => {
   try {
-    const db = await connectToMongoDB();  // Connect to MongoDB
-    const notificationsCollection = db.collection("binfullnotifications");  // Reference the collection
+    const db = await connectToMongoDB();
+    const notificationsCollection = db.collection("binfullnotifications");
 
-    const { binType, limit } = req.query;
+    const { machineId } = req.query;
+
     const filter = {};
-    if (binType) {
-      filter.binType = binType;
+    if (machineId) {
+      filter.machineId = machineId;
     }
 
     const notifications = await notificationsCollection.find(filter)
       .sort({ occurredAt: -1 }) // newest first
-      .limit(parseInt(limit, 10) || 100) // default max 100
       .toArray();
 
     res.status(200).json({
@@ -611,6 +609,7 @@ app.get("/getNotification", async (req, res) => {
   }
 });
 
+
 app.get("/getAllData", async (req, res) => {
   try {
     const db = await connectToMongoDB();
@@ -618,9 +617,13 @@ app.get("/getAllData", async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
+    const machineId = req.query.machineId; // 👈 get from query
+
+    const matchStage = machineId ? { machineId } : {}; // optional filter
 
     const data = await db.collection("feedbacks")
       .aggregate([
+        { $match: matchStage },  // filter feedback by machineId
         {
           $lookup: {
             from: "recyclingsessions",
@@ -640,7 +643,7 @@ app.get("/getAllData", async (req, res) => {
       ])
       .toArray();
 
-    const totalCount = await db.collection("feedbacks").countDocuments();
+    const totalCount = await db.collection("feedbacks").countDocuments(matchStage);
 
     res.json({
       page,
@@ -655,11 +658,15 @@ app.get("/getAllData", async (req, res) => {
   }
 });
 
+// Get aggregated stats for cups, bottles, points 
 app.get("/getstats", async (req, res) => {
   const db = await connectToMongoDB();
   try {
+    const { machineId } = req.query;
+    const matchStage = machineId ? { machineId } : {}; // optional filter
     const stats = await db.collection("recyclingsessions")
       .aggregate([
+        { $match: matchStage }, // filter by machineId if provided
         {
           $group: {
             _id: null,
@@ -677,10 +684,15 @@ app.get("/getstats", async (req, res) => {
   }
 });
 
-
-
-app.listen(3000, () => {
-  console.log("Server is running on port 3000");
+app.get("/getMachines", async (req, res) => {
+  try {
+    const db = await connectToMongoDB();
+    const machines = await db.collection("recyclingsessions").distinct("machineId");
+    res.json({ machines });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
 });
 
 //for fetching registered users based on points
@@ -754,4 +766,8 @@ app.get("/mobusers", async (req, res) => {
     console.error("Error fetching usernames:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
+});
+
+app.listen(3000, () => {
+  console.log("Server is running on port 3000");
 });
