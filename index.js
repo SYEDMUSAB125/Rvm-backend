@@ -617,29 +617,35 @@ app.get("/getAllData", async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
-    const machineId = req.query.machineId; // 👈 get from query
+    const machineId = req.query.machineId; // 👈 from query
 
-    const matchStage = machineId ? { machineId } : {}; // optional filter
+    const matchStage = machineId ? { machineId } : {};
 
     const data = await db.collection("feedbacks")
       .aggregate([
-        { $match: matchStage },  // filter feedback by machineId
+        { $match: matchStage },
         {
           $lookup: {
             from: "recyclingsessions",
-            localField: "phoneNumber",
-            foreignField: "phoneNumber",
-            as: "recyclingSessions",
-          },
+            let: { phone: "$phoneNumber", machine: "$machineId" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$phoneNumber", "$$phone"] },
+                      { $eq: ["$machineId", "$$machine"] } // 👈 filter sessions by machineId too
+                    ]
+                  }
+                }
+              }
+            ],
+            as: "recyclingSessions"
+          }
         },
-        {
-          $unwind: {
-            path: "$recyclingSessions",
-            preserveNullAndEmptyArrays: true,
-          },
-        },
+        { $unwind: { path: "$recyclingSessions", preserveNullAndEmptyArrays: true } },
         { $skip: skip },
-        { $limit: limit },
+        { $limit: limit }
       ])
       .toArray();
 
@@ -657,6 +663,7 @@ app.get("/getAllData", async (req, res) => {
     res.status(500).json({ message: "Internal Server Error" });
   }
 });
+
 
 // Get aggregated stats for cups, bottles, points 
 app.get("/getstats", async (req, res) => {
