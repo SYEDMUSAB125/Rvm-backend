@@ -9,6 +9,9 @@ const saltRounds = 10;
 const BinFullNotification = require("./model/BinFullNotification");
 const RecyclingSession = require("./model/RecyclingSession");
 const generateVouch365Link = require("./utils/vouch365")
+const jwt = require("jsonwebtoken");
+const SECRET_KEY = "isp-env-sol"; // move to env in real apps
+
 app.use(cors());
 app.use(express.json()); // Add this to parse JSON request bodies
 
@@ -66,8 +69,8 @@ app.post("/login", async (req, res) => {
     );
 
     // Find all recycling sessions for this user and calculate totals
-    const recyclingSessions = await recyclingSessionsCollection.find({ 
-      phoneNumber: user.mobile 
+    const recyclingSessions = await recyclingSessionsCollection.find({
+      phoneNumber: user.mobile
     }).toArray();
     console.log(recyclingSessions)
     // Calculate totals
@@ -81,7 +84,7 @@ app.post("/login", async (req, res) => {
         totalPoints += session.points || 0;
         totalBottles += session.bottles || 0;
         totalCups += session.cups || 0;
-        
+
         // Find the latest recycling date
         if (!latestRecycleDate || new Date(session.recycledAt) > new Date(latestRecycleDate)) {
           latestRecycleDate = session.recycledAt;
@@ -510,9 +513,6 @@ app.get("/usernames", async (req, res) => {
 });
 
 
-
-
-
 // POST endpoint to create a new user
 app.post("/users", async (req, res) => {
   try {
@@ -635,20 +635,21 @@ app.get("/gethistory/:phoneNumber", async (req, res) => {
   }
 });
 
+// RVM Admin Panel APIs
 app.get("/getNotification", async (req, res) => {
   try {
-    const db = await connectToMongoDB();  // Connect to MongoDB
-    const notificationsCollection = db.collection("binfullnotifications");  // Reference the collection
+    const db = await connectToMongoDB();
+    const notificationsCollection = db.collection("binfullnotifications");
 
-    const { binType, limit } = req.query;
+    const { machineId } = req.query;
+
     const filter = {};
-    if (binType) {
-      filter.binType = binType;
+    if (machineId) {
+      filter.machineId = machineId;
     }
 
     const notifications = await notificationsCollection.find(filter)
       .sort({ occurredAt: -1 }) // newest first
-      .limit(parseInt(limit, 10) || 100) // default max 100
       .toArray();
 
     res.status(200).json({
@@ -662,38 +663,97 @@ app.get("/getNotification", async (req, res) => {
   }
 });
 
+
 app.get("/getAllData", async (req, res) => {
   try {
-    const db = await connectToMongoDB();  // Connect to MongoDB
+    const db = await connectToMongoDB();
 
-    // Perform aggregation using the native MongoDB driver
-    const data = await db.collection("feedbacks").aggregate([
-      {
-        $lookup: {
-          from: "recyclingsessions", // Name of the recycling sessions collection
-          localField: "phoneNumber", // Field in the feedbacks collection
-          foreignField: "phoneNumber", // Field in the recycling sessions collection
-          as: "recyclingSessions", // Alias for the joined data
-        },
-      },
-      {
-        $unwind: {
-          path: "$recyclingSessions", // Flatten the recyclingSessions array
-          preserveNullAndEmptyArrays: true, // Include feedback data even if no recycling session
-        },
-      },
-    ]).toArray();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+    const machineId = req.query.machineId; // 👈 from query
 
-    // Send the combined result to the client
-    res.json(data);
+    const matchStage = machineId ? { machineId } : {};
+
+    const data = await db.collection("feedbacks")
+      .aggregate([
+        { $match: matchStage },
+        {
+          $lookup: {
+            from: "recyclingsessions",
+            let: { phone: "$phoneNumber", machine: "$machineId" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$phoneNumber", "$$phone"] },
+                      { $eq: ["$machineId", "$$machine"] } // 👈 filter sessions by machineId too
+                    ]
+                  }
+                }
+              }
+            ],
+            as: "recyclingSessions"
+          }
+        },
+        { $unwind: { path: "$recyclingSessions", preserveNullAndEmptyArrays: true } },
+        { $skip: skip },
+        { $limit: limit }
+      ])
+      .toArray();
+
+    const totalCount = await db.collection("feedbacks").countDocuments(matchStage);
+
+    res.json({
+      page,
+      limit,
+      totalPages: Math.ceil(totalCount / limit),
+      totalCount,
+      data,
+    });
   } catch (error) {
     console.error("Error fetching data:", error);
     res.status(500).json({ message: "Internal Server Error" });
   }
 });
 
-app.listen(3000, () => {
-  console.log("Server is running on port 3000");
+
+// Get aggregated stats for cups, bottles, points 
+app.get("/getstats", async (req, res) => {
+  const db = await connectToMongoDB();
+  try {
+    const { machineId } = req.query;
+    const matchStage = machineId ? { machineId } : {}; // optional filter
+    const stats = await db.collection("recyclingsessions")
+      .aggregate([
+        { $match: matchStage }, // filter by machineId if provided
+        {
+          $group: {
+            _id: null,
+            totalBottles: { $sum: "$bottles" },
+            totalCups: { $sum: "$cups" },
+            totalPoints: { $sum: "$points" },
+          },
+        },
+      ])
+      .toArray();
+
+    res.json(stats[0] || { totalBottles: 0, totalCups: 0, totalPoints: 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/getMachines", async (req, res) => {
+  try {
+    const db = await connectToMongoDB();
+    const machines = await db.collection("recyclingsessions").distinct("machineId");
+    res.json({ machines });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
 });
 
 //for fetching registered users based on points
@@ -707,6 +767,8 @@ app.get("/registeredusers", async (req, res) => {
         $match: {
           phoneNumber: { $ne: null },
           userName: { $ne: null },
+          bottles: { $ne: null},
+          cups: { $ne: null},
         },
       },
       {
@@ -714,6 +776,8 @@ app.get("/registeredusers", async (req, res) => {
           _id: "$phoneNumber",
           totalPoints: { $sum: "$points" },
           latestUserName: { $last: "$userName" },
+          totalBottles: { $sum: "$bottles" },
+          totalCups: { $sum: "$cups" },
         },
       },
       {
@@ -727,11 +791,13 @@ app.get("/registeredusers", async (req, res) => {
     ]).toArray(); // <-- FIXED HERE
 
     res.status(200).json({
-      message: "Top 5 users fetched successfully.",
+      message: "registered users fetched successfully.",
       users: userPoints.map(user => ({
         phoneNumber: user._id,
         userName: user.latestUserName,
         totalPoints: user.totalPoints,
+        totalBottles: user.totalBottles,
+        totalCups: user.totalCups,
       })),
     });
   } catch (error) {
@@ -739,13 +805,15 @@ app.get("/registeredusers", async (req, res) => {
     res.status(500).json({ message: "Internal server error." });
   }
 });
+
 app.post('/loginadmin', (req, res) => {
   const { username, password } = req.body;
-  // Authenticate user here
+
   if (username === 'admin' && password === 'admin') {
-    return res.json({ success: true });
+    const token = jwt.sign({ username }, SECRET_KEY, { expiresIn: "1h" });
+    return res.json({ success: true, token });
   } else {
-    return res.json({ success: false });
+    return res.json({ success: false, message: "Invalid credentials" });
   }
 });
 
@@ -765,4 +833,8 @@ app.get("/mobusers", async (req, res) => {
     console.error("Error fetching usernames:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
+});
+
+app.listen(3000, () => {
+  console.log("Server is running on port 3000");
 });
