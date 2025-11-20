@@ -713,6 +713,8 @@ app.get("/registeredusers", async (req, res) => {
         $match: {
           phoneNumber: { $ne: null },
           userName: { $ne: null },
+          bottles: { $ne: null},
+          cups: { $ne: null},
         },
       },
       {
@@ -720,6 +722,8 @@ app.get("/registeredusers", async (req, res) => {
           _id: "$phoneNumber",
           totalPoints: { $sum: "$points" },
           latestUserName: { $last: "$userName" },
+          totalBottles: { $sum: "$bottles" },
+          totalCups: { $sum: "$cups" },
         },
       },
       {
@@ -733,11 +737,13 @@ app.get("/registeredusers", async (req, res) => {
     ]).toArray(); // <-- FIXED HERE
 
     res.status(200).json({
-      message: "Top 5 users fetched successfully.",
+      message: "registered users fetched successfully.",
       users: userPoints.map(user => ({
         phoneNumber: user._id,
         userName: user.latestUserName,
         totalPoints: user.totalPoints,
+        totalBottles: user.totalBottles,
+        totalCups: user.totalCups,
       })),
     });
   } catch (error) {
