@@ -768,18 +768,19 @@ app.get("/mobusers", async (req, res) => {
     const db = await connectToMongoDB();
     const userProfiles = db.collection("userprofile");
 
-    // Fetch only the 'username' field and exclude '_id'
-    const users = await userProfiles.find({}, { projection: { username: 1, _id: 0 } }).toArray();
+    // Fetch username + gender, exclude _id
+    const users = await userProfiles.find(
+      {},
+      { projection: { username: 1, gender: 1, _id: 0 } }
+    ).toArray();
 
-    // Extract usernames from the result
-    const usernames = users.map(user => user.username);
-
-    res.json({ success: true, usernames });
+    res.json({ success: true, users });
   } catch (error) {
     console.error("Error fetching usernames:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 app.listen(3000, () => {
   console.log("Server is running on port 3000");
