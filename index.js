@@ -123,6 +123,60 @@ app.post("/login", async (req, res) => {
   }
 });
 
+app.post("/get-points", async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "phoneNumber is required",
+      });
+    }
+
+    // Connect to DB
+    const db = await connectToMongoDB();
+    const recyclingSessionsCollection = db.collection("recyclingsessions");
+
+    // Fetch all sessions for this phone number
+    const sessions = await recyclingSessionsCollection
+      .find({ phoneNumber })
+      .toArray();
+
+    // Initialize totals
+    let totalPoints = 0;
+    let totalBottles = 0;
+    let totalCups = 0;
+
+    // Loop and sum
+    sessions.forEach((session) => {
+      totalPoints += session.points || 0;
+      totalBottles += session.bottles || 0;
+      totalCups += session.cups || 0;
+    });
+
+    const totalSessions = sessions.length;
+
+    return res.json({
+      _id: sessions[0]?._id || null,
+      userName: sessions[0]?.userName || null,
+      phoneNumber: phoneNumber,
+      bottles: totalBottles,
+      cups: totalCups,
+      points: totalPoints,
+      recycledAt: sessions[0]?.recycledAt || null, // latest session timestamp
+      totalSessions: totalSessions,
+    });
+  } catch (error) {
+    console.error("Error fetching total points:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+});
+
+
 app.post("/generate-vouch365-link", (req, res) => {
   console.log(req.body)
   const { username, phone } = req.body;
