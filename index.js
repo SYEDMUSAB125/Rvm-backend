@@ -641,28 +641,42 @@ app.get("/getNotification", async (req, res) => {
     const db = await connectToMongoDB();
     const notificationsCollection = db.collection("binfullnotifications");
 
-    const { machineId } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
 
+    const machineId = req.query.machineId;
+
+
+    // Build filter dynamically
     const filter = {};
-    if (machineId) {
-      filter.machineId = machineId;
-    }
+    if (machineId) filter.machineId = machineId;
 
-    const notifications = await notificationsCollection.find(filter)
-      .sort({ occurredAt: -1 }) // newest first
+    // Total count (for pagination)
+    const totalCount = await notificationsCollection.countDocuments(filter);
+
+    // Paginated notifications
+    const notifications = await notificationsCollection
+      .find(filter)
+      .sort({ occurredAt: -1 })
+      .skip(skip)
+      .limit(limit)
       .toArray();
 
     res.status(200).json({
+      success: true,
       message: "Notifications fetched successfully.",
+      currentPage: page,
+      totalPages: Math.ceil(totalCount / limit),
+      totalCount,
       count: notifications.length,
       notifications,
     });
   } catch (error) {
     console.error("Error fetching notifications:", error);
-    res.status(500).json({ message: "Internal server error." });
+    res.status(500).json({ success: false, message: "Internal server error." });
   }
 });
-
 
 app.get("/getAllData", async (req, res) => {
   try {
@@ -678,6 +692,8 @@ app.get("/getAllData", async (req, res) => {
     const data = await db.collection("feedbacks")
       .aggregate([
         { $match: matchStage },
+        { $addFields: { createdAtDate: { $toDate: "$createdAt" } } },
+        { $sort: { createdAtDate: -1 } },
         {
           $lookup: {
             from: "recyclingsessions",
@@ -688,7 +704,7 @@ app.get("/getAllData", async (req, res) => {
                   $expr: {
                     $and: [
                       { $eq: ["$phoneNumber", "$$phone"] },
-                      { $eq: ["$machineId", "$$machine"] } // 👈 filter sessions by machineId too
+                      { $eq: ["$machineId", "$$machine"] }
                     ]
                   }
                 }
@@ -702,6 +718,7 @@ app.get("/getAllData", async (req, res) => {
         { $limit: limit }
       ])
       .toArray();
+
 
     const totalCount = await db.collection("feedbacks").countDocuments(matchStage);
 
@@ -763,14 +780,20 @@ app.get("/registeredusers", async (req, res) => {
     const usersCollection = db.collection("recyclingsessions");
 
     const userPoints = await usersCollection.aggregate([
+      // Filter valid entries
       {
         $match: {
           phoneNumber: { $ne: null },
           userName: { $ne: null },
-          bottles: { $ne: null},
-          cups: { $ne: null},
+          bottles: { $ne: null },
+          cups: { $ne: null },
         },
       },
+
+      // Sort so $last returns correct userName
+      { $sort: { _id: 1 } },
+
+      // Group by phone number
       {
         $group: {
           _id: "$phoneNumber",
@@ -780,31 +803,56 @@ app.get("/registeredusers", async (req, res) => {
           totalCups: { $sum: "$cups" },
         },
       },
+
+      // Lookup gender from User collection
+      {
+        $lookup: {
+          from: "userprofile",         // <-- Collection name
+          localField: "_id",    // phoneNumber from recyclingsessions
+          foreignField: "mobile",
+          as: "userData",
+        },
+      },
+
+      // Extract gender safely
+      {
+        $addFields: {
+          gender: { $arrayElemAt: ["$userData.gender", 0] },
+          nic: { $arrayElemAt: ["$userData.nic", 0] },
+        },
+      },
+
+      // Remove users with no userName
       {
         $match: {
           latestUserName: { $ne: null },
         },
       },
+
+      // Sort by points
       {
         $sort: { totalPoints: -1 },
       },
-    ]).toArray(); // <-- FIXED HERE
+    ]).toArray();
 
     res.status(200).json({
       message: "registered users fetched successfully.",
       users: userPoints.map(user => ({
         phoneNumber: user._id,
-        userName: user.latestUserName,
-        totalPoints: user.totalPoints,
-        totalBottles: user.totalBottles,
-        totalCups: user.totalCups,
+        userName: user.latestUserName || null,
+        totalPoints: user.totalPoints || null,
+        totalBottles: user.totalBottles || null,
+        totalCups: user.totalCups || null,
+        gender: user.gender || null,
+        nic: user.nic || null,
       })),
     });
   } catch (error) {
-    console.error("Error fetching top users:", error);
+    console.error("Error fetching registered users:", error);
     res.status(500).json({ message: "Internal server error." });
   }
 });
+
 
 app.post('/loginadmin', (req, res) => {
   const { username, password } = req.body;
