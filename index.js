@@ -1076,11 +1076,11 @@ app.post('/reset-password', async (req, res) => {
         message: 'User not found'
       });
     }
-
+const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
     // Update user's password using updateOne
     await User.updateOne(
       { email: email },
-      { $set: { password: newPassword } }
+      { $set: { password: hashedPassword } }
     );
 
     // Mark OTP as used
