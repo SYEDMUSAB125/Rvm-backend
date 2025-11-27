@@ -8,9 +8,13 @@ const bcrypt = require('bcrypt');
 const saltRounds = 10;
 const BinFullNotification = require("./model/BinFullNotification");
 const RecyclingSession = require("./model/RecyclingSession");
+const PasswordReset = require("./model/PasswordReset");
 const generateVouch365Link = require("./utils/vouch365")
 const jwt = require("jsonwebtoken");
+const OTPService = require("./services/otpService");
 const SECRET_KEY = "isp-env-sol"; // move to env in real apps
+
+// const OTPService = require('../services/otpService');
 
 app.use(cors());
 app.use(express.json()); // Add this to parse JSON request bodies
@@ -882,6 +886,319 @@ app.get("/mobusers", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+app.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+       const db = await connectToMongoDB();
+    const User = db.collection("userprofile");
+    // Check if user exists
+    const user = await User.findOne({ email });
+    if (!user) {
+      // For security, don't reveal if email exists or not
+      return res.json({
+        success: true,
+        message: 'If the email exists, an OTP has been sent'
+      });
+    }
+
+    // Generate OTP
+    const otpCode = OTPService.generateOTP();
+    const otpExpiry = OTPService.getOTPExpiry();
+
+    // Check if there's an existing OTP for this email
+    const existingReset = await PasswordReset.findOne({ email });
+
+    if (existingReset) {
+      // Update existing OTP entry
+      existingReset.otp = otpCode;
+      existingReset.expiresAt = otpExpiry;
+      existingReset.used = false;
+      existingReset.attempts = 0;
+      await existingReset.save();
+    } else {
+      // Create new OTP entry
+      await PasswordReset.create({
+        email,
+        otp: otpCode,
+        expiresAt: otpExpiry
+      });
+    }
+
+    // Send OTP via email
+    const emailSent = await OTPService.sendPasswordResetOTP(email, otpCode);
+    
+    if (!emailSent) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP email'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'OTP sent to your email'
+    });
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Resend OTP
+app.post('/resend-otp', async (req, res) => {
+  try {
+    const { email } = req.body;
+       const db = await connectToMongoDB();
+ const User = db.collection("userprofile");
+    // Check if user exists
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Generate new OTP
+    const otpCode = OTPService.generateOTP();
+    const otpExpiry = OTPService.getOTPExpiry();
+
+    // Find existing OTP entry and update it
+    const existingReset = await PasswordReset.findOne({ email });
+
+    if (existingReset) {
+      // Update the existing entry with new OTP
+      existingReset.otp = otpCode;
+      existingReset.expiresAt = otpExpiry;
+      existingReset.used = false;
+      existingReset.attempts = 0;
+      await existingReset.save();
+    } else {
+      // Create new entry if doesn't exist
+      await PasswordReset.create({
+        email,
+        otp: otpCode,
+        expiresAt: otpExpiry
+      });
+    }
+
+    // Send new OTP
+    const emailSent = await OTPService.sendPasswordResetOTP(email, otpCode);
+    
+    if (!emailSent) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP email'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'New OTP sent to your email'
+    });
+
+  } catch (error) {
+    console.error('Resend OTP error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Verify OTP and reset password
+app.post('/reset-password', async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+    const db = await connectToMongoDB();
+    const User = db.collection("userprofile");
+
+    // Find the OTP record
+    const otpRecord = await PasswordReset.findOne({ 
+      email, 
+      used: false 
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired OTP'
+      });
+    }
+
+    // Check if OTP is expired
+    if (new Date() > otpRecord.expiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: 'OTP has expired'
+      });
+    }
+
+    // Check if OTP matches
+    if (otpRecord.otp !== otp) {
+      // Increment attempts
+      otpRecord.attempts += 1;
+      
+      // Lock after 3 failed attempts
+      if (otpRecord.attempts >= 3) {
+        otpRecord.used = true;
+        await PasswordReset.updateOne(
+          { _id: otpRecord._id },
+          { $set: { used: true, attempts: otpRecord.attempts } }
+        );
+        return res.status(400).json({
+          success: false,
+          message: 'Too many failed attempts. Please request a new OTP.'
+        });
+      }
+      
+      await PasswordReset.updateOne(
+        { _id: otpRecord._id },
+        { $set: { attempts: otpRecord.attempts } }
+      );
+      
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid OTP'
+      });
+    }
+
+    // Find user and update password
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update user's password using updateOne
+    await User.updateOne(
+      { email: email },
+      { $set: { password: newPassword } }
+    );
+
+    // Mark OTP as used
+    await PasswordReset.updateOne(
+      { _id: otpRecord._id },
+      { $set: { used: true } }
+    );
+
+    // Send success email
+    await OTPService.sendPasswordResetSuccess(email);
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Validate OTP (without resetting password)
+app.post('/validate-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    const otpRecord = await PasswordReset.findOne({ 
+      email, 
+      used: false 
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        success: false,
+        isValid: false,
+        message: 'Invalid or expired OTP'
+      });
+    }
+
+    // Check expiration
+    if (new Date() > otpRecord.expiresAt) {
+      return res.status(400).json({
+        success: false,
+        isValid: false,
+        message: 'OTP has expired'
+      });
+    }
+
+    // Check OTP match
+    if (otpRecord.otp !== otp) {
+      otpRecord.attempts += 1;
+      
+      if (otpRecord.attempts >= 3) {
+        otpRecord.used = true;
+        await otpRecord.save();
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          message: 'Too many failed attempts. Please request a new OTP.'
+        });
+      }
+      
+      await otpRecord.save();
+      
+      return res.status(400).json({
+        success: false,
+        isValid: false,
+        message: 'Invalid OTP'
+      });
+    }
+
+    res.json({
+      success: true,
+      isValid: true,
+      message: 'OTP is valid'
+    });
+
+  } catch (error) {
+    console.error('Validate OTP error:', error);
+    res.status(500).json({
+      success: false,
+      isValid: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 app.listen(3000, () => {
